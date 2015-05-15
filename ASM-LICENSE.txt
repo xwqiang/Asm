@@ -1,0 +1,2 @@
+ASM is licensed under the BSD License. See the official license page at
+http://asm.objectweb.org/license.html

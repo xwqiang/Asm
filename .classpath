@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<classpath>
+	<classpathentry kind="src" path="src"/>
+	<classpathentry kind="con" path="org.eclipse.jdt.launching.JRE_CONTAINER"/>
+	<classpathentry kind="lib" path="asm-2.0.RC1.jar"/>
+	<classpathentry kind="lib" path="asm-analysis-2.0.RC1.jar"/>
+	<classpathentry kind="lib" path="asm-attrs-2.0.RC1.jar"/>
+	<classpathentry kind="lib" path="asm-commons-2.0.RC1.jar"/>
+	<classpathentry kind="lib" path="asm-tree-2.0.RC1.jar"/>
+	<classpathentry kind="lib" path="asm-util-2.0.RC1.jar"/>
+	<classpathentry kind="lib" path="asm-xml-2.0.RC1.jar"/>
+	<classpathentry kind="lib" path="tostring-agent.jar"/>
+	<classpathentry kind="lib" path="Metrics.jar"/>
+	<classpathentry kind="output" path="bin"/>
+</classpath>

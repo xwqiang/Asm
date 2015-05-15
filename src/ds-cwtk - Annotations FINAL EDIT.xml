@@ -1,0 +1,934 @@
+<dw-document xsi:noNamespaceSchemaLocation="http://dw.raleigh.ibm.com/developerworks/library/schema/4.0/dw-document-4.0.xsd" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+
+<dw-article local-site="worldwide" ratings-form="auto" related-contents="auto" toc="auto" skill-level="3">
+
+<id cma-id="" domino-uid="" content-id="" original="yes"/>
+
+<keywords content="classworking, bytecode, Dennis Sosnoski, ASM, code generation, generating class files, Java reflection, performance" />
+
+<meta-last-updated day="01" month="03" year="2005" initials="gem"/>
+
+<content-area-primary name="java" />
+
+<content-area-secondary name="opensource" />
+
+<series-title>Classworking toolkit</series-title>
+<title>Annotations with ASM</title>
+<subtitle>ASM 2.0 includes support for all the latest J2SE 5.0 features. 
+Dennis Sosnoski looks into using the ASM annotations support 
+along with J2SE instrumentation features for runtime generation of a 
+toString() method.</subtitle>
+
+<author jobtitle="Java and XML consultant" company="Sosnoski Software Solutions, Inc." 
+email-cc="" email="dms@sosnoski.com">
+<bio>Dennis Sosnoski is the founder and lead consultant of Seattle-area Java technology 
+consulting company Sosnoski Software Solutions, Inc., specialists in
+<a href="http://www.sosnoski.com">XML and Web services training and consulting</a>. His
+professional software development experience spans over 30 years, with the last
+several years focused on server-side XML and Java technologies. Dennis is a
+frequent speaker at conferences nationwide. He's also the lead developer of the
+open source <a href="http://www.jibx.org">JiBX XML Data Binding</a> framework
+build around Java classworking technology.</bio>
+
+<img src="photo.jpg" width="64" height="80" alt="Author photo"/>
+<name>Dennis M. Sosnoski</name></author>
+
+<date-updated day="01" month="03" year="2005" />
+
+<abstract>Tired of building and maintaining 
+<code type="inline">toString()</code> methods for all your
+data classes? In this edition of <i>Classworking
+toolkit</i>, consultant Dennis Sosnoski shows how you
+can automate the process using J2SE 5.0 annotations
+and the ASM bytecode manipulation framework. He takes
+advantage of the new J2SE 5.0 instrumentation API to
+invoke ASM as classes are loaded into the JVM, providing
+on-the-fly class modification at runtime. Share your
+thoughts on this article with the author and other
+readers in the accompanying discussion forum. (You can
+also click Discuss at the top or bottom of the article
+to access the forum.)</abstract>
+
+<column-info col-name="Classworking Toolkit" col-icon="column_icon.gif"/>
+
+<docbody>
+
+<p>With J2SE 5.0, Sun has added a number of new features to the Java platform.
+One of the most important new features is support for annotations. Annotations
+promise to be useful for associating many types of metadata with Java code, and
+are already being used extensively to replace custom configuration files in new
+and updated JSRs for extensions to the Java platform. In this column, I'll show
+how you can use the ASM bytecode manipulation framework in combination with
+another new J2SE 5.0 feature -- the instrumentation package -- to transform
+classes as they're being loaded into the JVM as directed by annotations.</p>
+
+
+<heading refname="h1" type="major" toc="yes" alttoc="">Annotation basics</heading>
+<p>Many articles have already been published discussing J2SE 5.0 annotations
+(see <a href="#resources">Resources</a> for some), so I'll just include a brief summary
+here. Annotations are a form of metadata for Java code. They're similar in
+function to the XDoclet-style metadata that's become increasingly popular for
+working with complex framework configurations, but the implementation has much
+more in common with C# attributes than with XDoclet.</p>
+
+<p>The Java implementation of this language feature uses an interface-like
+structure with some special extensions to the Java language syntax. I find it
+clearer to ignore this interface-like structure for most purposes and instead
+think of annotations as a hashmap of name-value pairs. Each annotation type
+defines a fixed set of names associated with that annotation. Each name may be
+given a default value, but otherwise needs to be defined for each use of the
+annotation. Annotations can be specified to apply to a particular type of Java
+component (such as a class, field, method, and so on), and can even be applied
+to other annotations (in fact, the way you restrict the components an annotation
+can be used for is by using a special predefined annotation on the definition of
+the annotation to be restricted).</p>
+
+<p>Unlike regular interfaces, annotations must use the keyword <code
+type="inline">@interface</code> in their definitions. Also unlike regular
+interfaces, annotations can only define "methods" that take no parameters and
+return only simple values (primitive types, <code type="inline">String</code>,
+<code type="inline">Class</code>, <code type="inline">enum</code> types,
+annotations, and arrays of any of these types). These "methods" are the names
+for the values associated with the annotation.</p>
+
+<p>Annotations are used as modifiers on declarations, just like <code
+type="inline">public</code>, <code type="inline">final</code>, and other keyword
+modifiers defined by the Java language prior to J2SE 5.0. The use of an
+annotation is indicated by the @ symbol followed by the annotation name. If
+values are to be supplied for the annotation, these are given as name-value
+pairs in parentheses following the annotation name.</p>
+
+<p>Listing 1 shows a sample annotation declaration
+followed by the definition of a class using that annotation on some methods.
+This <code type="inline">LogMe</code> annotation is intended to flag methods
+that should be included in the logging for an application. I've given the
+annotation two values, one representing the level of logging in which this call
+is to be included, the other the name to be used for the method call (defaulting
+to an empty string, on the assumption that the code that handles this
+annotation will substitute the actual method name when no name is supplied). I
+then use this annotation on a pair of methods in the <code
+type="inline">StringArray</code> class, for the <code
+type="inline">merge()</code> method just using the default values, and for the
+<code type="inline">indexOf()</code> method supplying explicit values.</p>
+
+<code type="section">
+<heading refname="code1" type="code" toc="no">Listing 1. Reflection-replacement interface and implementation</heading>
+import java.lang.annotation.ElementType;
+import java.lang.annotation.Target;
+
+/**
+ * Annotation for method to be included in logging.
+ */
+@Target({ElementType.METHOD})
+public @interface LogMe {
+    int level() default 0;
+    String name() default "";
+}
+
+public class StringArray
+{
+    private final String[] m_list;
+    
+    public StringArray(String[] list) {
+        ...
+    }
+    
+    public StringArray(StringArray base, String[] adds) {
+        ...
+    }
+    
+    @LogMe private String[] merge(String[] list1, String[]list2) {
+        ...
+    }
+    
+    public String get(int index) {
+        return m_list[index];
+    }
+    
+    @LogMe(level=1, name="lookup") public int indexOf(String value) {
+        ...
+    }
+    
+    public int size() {
+        return m_list.length;
+    }
+}
+</code>
+
+<p>I could elaborate this sample, but I'll instead move on to a different (and
+I think more interesting) application in the next section.</p>
+
+
+<heading refname="h2" type="major" toc="yes" alttoc="">Building a toString()</heading>
+<p>The Java platform provides a convenient hook for generating a text description of an
+object in the form of the <code type="inline">toString()</code> method. The
+ultimate base class <code type="inline">java.lang.Object</code> provides a
+default implementation of this method, but encourages overriding the default
+implementation to supply a more useful description. Many developers make a
+habit of providing their own implementations, at least for classes that are
+largely data representations. I'll confess up front that I'm not one of them --
+I've often found <code type="inline">toString()</code> useful, but generally
+don't bother overriding the default. To be useful, a <code
+type="inline">toString()</code> implementation needs to be kept up to date as
+fields are added and removed from the class, and I find this step too much
+trouble to be worthwhile in general.</p>
+
+<p>Combining annotations with class file modification can provide a way out of
+this dilemma. The problem I have with maintaining a <code
+type="inline">toString()</code> method is due to the code being separate from the
+field declarations in the class, meaning I have another thing I need to
+remember to change anytime I add or remove a field. By using annotations on the
+field declarations, I can easily indicate which fields I want included in the
+<code type="inline">toString()</code> method, while leaving the actual
+implementation of the method to a classworking tool. That way everything is in
+one place (the field declaration), and I get my useful description out of <code
+type="inline">toString()</code> without needing to maintain the code.</p>
+
+<heading refname="h2.1" type="minor" toc="no">Sampling the source</heading>
+<p>Before launching into implementing an annotation for <code
+type="inline">toString()</code> method construction, I'll give a sample of what
+I'd like to accomplish. Listing 2 shows a simple data holder
+class with a <code type="inline">toString()</code> method included in the source
+code:</p>
+
+<code type="section">
+<heading refname="code2" type="code" toc="no">Listing 2. Data class with the toString() method</heading>
+public class Address
+{
+    private String m_street;
+    private String m_city;
+    private String m_state;
+    private String m_zip;
+    
+    public Address() {}
+
+    public Address(String street, String city, String state, String zip) {
+        m_street = street;
+        m_city = city;
+        m_state = state;
+        m_zip = zip;
+    }
+    public String getCity() {
+        return m_city;
+    }
+    public void setCity(String city) {
+        m_city = city;
+    }
+    ...
+    public String toString() {
+        StringBuffer buff = new StringBuffer();
+        buff.append("Address: street=");
+        buff.append(m_street);
+        buff.append(", city=");
+        buff.append(m_city);
+        buff.append(", state=");
+        buff.append(m_state);
+        buff.append(", zip=");
+        buff.append(m_zip);
+        return buff.toString();
+    }
+}
+</code>
+
+<p>For the Listing 2 sample, I've chosen to include all the
+fields in the <code type="inline">toString()</code> output in the same order
+they're declared in the class, and to preface each field value with a "name="
+text to identify it in the output. For this case, the text is generated directly
+from the field name, by just stripping off the leading "m_" prefix I use to
+identify member fields. In other cases, I may want to only include certain fields
+in the output, to change the order, change the identifier text used for a value,
+or even skip the identifier text completely. The annotation format should be
+flexible enough to express all these possibilities.</p>
+
+<heading refname="h2.2" type="minor" toc="no">Defining the annotation</heading>
+<p>You can define annotations for <code
+type="inline">toString()</code> generation in many different ways. To really make it useful, I'd want to
+minimize the number of annotations required, perhaps by using a class
+annotation to flag the classes where I want the method generated in combination
+with individual field annotations to override the default handling of fields.
+That's not too difficult to do, but the implementation code becomes fairly
+complex. For this article, I'm instead going to keep it simple and just use an
+annotation on the individual fields to be included in the description of an
+instance.</p>
+
+<p>The factors I want to control are which fields are included, whether a field
+value has leading text, whether that text is based on the field name,
+and the order of fields in the output. Listing 3 gives a basic annotation for this purpose:</p>
+
+<code type="section">
+<heading refname="code3" type="code" toc="no">Listing 3. Annotation for toString() generation</heading>
+package com.sosnoski.asm;
+
+import java.lang.annotation.ElementType;
+import java.lang.annotation.Target;
+
+@Target({ElementType.FIELD})
+public @interface ToString {
+    int order() default 0;
+    String text() default "";
+}
+</code>
+
+<p>The Listing 3 annotation just defines a pair of named
+values, giving the order and lead text to be used for a field. I've restricted
+the use of this annotation to field declarations with the <code
+type="inline">@Target</code> line. I've also defined defaults for each of the
+values. These defaults don't apply to the generated annotation information that
+goes into the binary class representation (they only apply when annotations are
+accessed at runtime as a pseudo-interface, which I won't be doing), so I don't
+actually care what values are used here. By defining defaults, I'm just making
+the values optional so that I don't have to specify them each time I use the
+annotation.</p>
+
+<p>One factor to keep in mind when working with annotations is that the named
+values must always be compile-time constants and can never be <code
+type="inline">null</code>. This rule applies to both the default values, if given,
+and to values set by the user. I gather this decision was made on the basis of
+consistency with the earlier Java language definition, though I find it strange
+that a specification that makes such major modifications to the Java language
+would limit itself to consistency in this one area.</p>
+
+
+<heading refname="h3" type="major" toc="yes" alttoc="">Implementing the generation</heading>
+<p>Now that the groundwork has been laid, it's time to look at implementing the
+classworking tranformation that will add <code type="inline">toString()</code>
+methods to annotated classes as they're being loaded. This implementation involves three
+separate pieces of code: Intercepting the classloading, accessing the annotation
+information, and the actual transformation.</p>
+
+<heading refname="h3.1" type="minor" toc="no">Intercepting with instrumentation</heading>
+<p>J2SE 5.0 adds many features to the Java platform. Personally, I'm not
+convinced that all these additions are really improvements. Two  
+little-noticed new features that are really useful for classworking purposes, though, are the <code type="inline">java.lang.instrument</code> package and
+JVM interface, which allow the user to (among other things) specify class
+transformation agents to be used when executing a program.</p>
+
+<p>To use a transformation agent, you need to specify the agent class when you
+start the JVM. When using the <i>java</i> command line tool to launch the JVM,
+you can specify agents using command line parameters of the form <code
+type="inline">-javaagent:jarpath[=options]</code>, where "jarpath" is the path
+to the <i>jar</i> file containing the agent class, and "options" is a parameter
+string for the agent. The agent <i>jar</i> file uses a special manifest
+attribute to specify the actual agent class, which must define a method <code
+type="inline">public static void premain(String options, Instrumentation
+inst)</code>. This agent <code type="inline">premain()</code> method will be
+called before the application's <code type="inline">main()</code> method, and is
+able to register an actual transformer with the passed-in <code
+type="inline">java.lang.instrument.Instrumentation</code> class instance.</p>
+
+<p>The transformer class must implement the <code
+type="inline">java.lang.instrument.ClassFileTransformer</code> interface, which
+defines a single <code type="inline">transform()</code> method. When a
+transformer instance is registered with the <code
+type="inline">Instrumentation</code> class instance, that transformer instance
+will be called for each class being created in the JVM. The transformer gets
+access to the binary class representation, and can modify the class
+representation before it is loaded by the JVM.</p>
+
+<p>Listing 4 gives the agent and transformer class (both the
+same class in this case, though they don't need to be) implementation for
+processing the annotations. The <code type="inline">transform()</code>
+implementation uses ASM to scan the supplied binary class representation and
+look for the appropriate annotations, collecting information about the
+annotated fields of the class. If annotated fields are found, the class is
+modified to include a generated <code type="inline">toString()</code> method and
+the modified binary representation is returned. Otherwise the <code
+type="inline">transform()</code> method just returns <code
+type="inline">null</code> to indicate that no modifications are necessary.</p>
+
+<code type="section">
+<heading refname="code4" type="code" toc="no">Listing 4. Agent and transformer class</heading>
+package com.sosnoski.asm;
+
+import java.lang.instrument.ClassFileTransformer;
+import java.lang.instrument.IllegalClassFormatException;
+import java.lang.instrument.Instrumentation;
+import java.security.ProtectionDomain;
+
+import org.objectweb.asm.ClassReader;
+import org.objectweb.asm.ClassWriter;
+
+public class ToStringAgent implements ClassFileTransformer
+{
+    // transformer interface implementation
+    public byte[] transform(ClassLoader loader, String cname, Class clas,
+        ProtectionDomain domain, byte[] bytes)
+        throws IllegalClassFormatException {
+        System.out.println("Processing class " + cname);
+        try {
+            
+            // scan class binary format to find fields for toString() method
+            ClassReader creader = new ClassReader(bytes);
+            FieldCollector visitor = new FieldCollector();
+            creader.accept(visitor, true);
+            FieldInfo[] fields = visitor.getFields();
+            if (fields.length > 0) {
+                
+                // annotated fields present, generate the toString() method
+                System.out.println("Modifying " + cname);
+                ClassWriter writer = new ClassWriter(false);
+                ToStringGenerator gen = new ToStringGenerator(writer,
+                        cname.replace('.', '/'), fields);
+                creader.accept(gen, false);
+                return writer.toByteArray();
+                
+            }
+        } catch (IllegalStateException e) {
+            throw new IllegalClassFormatException("Error: " + e.getMessage() +
+                " on class " + cname);
+        }
+        return null;
+    }
+    
+    // Required method for instrumentation agent.
+    public static void premain(String arglist, Instrumentation inst) {
+        inst.addTransformer(new ToStringAgent());
+    }
+}
+</code>
+
+<p>The instrumentation features of J2SE 5.0 go beyond what I've shown here,
+including the ability to access all the classes that have been loaded into the
+JVM and even to redefine existing classes (if supported by the JVM). For this
+column, I'll skip these other features and just move on to the ASM code used to
+process the annotations and modify a class.</p>
+
+<heading refname="h3.2" type="minor" toc="no">Accumulating the metadata</heading>
+<p>ASM 2.0 makes processing of annotations easy. As discussed in the last
+column[PJV: JENNI, PLEASE ADD LINK TO LAST COLUMN HERE], ASM uses a visitor approach for reporting all components of class data. J2SE 5.0 annotations are reported using the <code
+type="inline">org.objectweb.asm.AnnotationVisitor</code> interface. This
+interface defines several methods, of which I'm only going to use two: <code
+type="inline">visitAnnotation()</code> is the method called when processing an
+annotation, and <code type="inline">visit()</code> is the method called when
+processing a particular name-value pair for an annotation. I also need the
+actual field information, which is reported using the <code
+type="inline">visitField()</code> method of the basic
+<code type="inline">org.objectweb.asm.ClassVisitor</code> interface.</p>
+
+<p>Implementing all the methods of the two interfaces of interest would be
+tedious, but ASM fortunately provides a convenient <code
+type="inline">org.objectweb.asm.commons.EmptyVisitor</code> class as a base
+for writing your own visitors. <code type="inline">EmptyVisitor</code> just
+provides an empty implementation of all the various types of visitors, allowing
+you to subclass and override only the visitor methods of interest. Listing 5 gives my implementation of the <code
+type="inline">FieldCollector</code> class for processing <code
+type="inline">ToString</code> annotations, extending the <code
+type="inline">EmptyVisitor</code> class. It also includes the <code
+type="inline">FieldInfo</code> class used to hold collected field
+information.</p>
+
+<code type="section">
+<heading refname="code5" type="code" toc="no">Listing 5. Annotation processing class</heading>
+package com.sosnoski.asm;
+
+import java.util.ArrayList;
+import java.util.Arrays;
+
+import org.objectweb.asm.AnnotationVisitor;
+import org.objectweb.asm.FieldVisitor;
+import org.objectweb.asm.Opcodes;
+import org.objectweb.asm.Type;
+import org.objectweb.asm.commons.EmptyVisitor;
+
+/**
+ * Visitor implementation to collect field annotation information from class.
+ */
+public class FieldCollector extends EmptyVisitor
+{
+    private boolean m_isIncluded;
+    private int m_fieldAccess;
+    private String m_fieldName;
+    private Type m_fieldType;
+    private int m_fieldOrder;
+    private String m_fieldText;
+    private ArrayList m_fields = new ArrayList();
+    
+    // finish field handling, once we're past it
+    private void finishField() {
+        if (m_isIncluded) {
+            m_fields.add(new FieldInfo(m_fieldName, m_fieldType,
+                m_fieldOrder, m_fieldText));
+        }
+        m_isIncluded = false;
+    }
+    
+    // return array of included field information
+    public FieldInfo[] getFields() {
+        finishField();
+        FieldInfo[] infos =
+            (FieldInfo[])m_fields.toArray(new FieldInfo[m_fields.size()]);
+        Arrays.sort(infos);
+        return infos;
+    }
+    
+    // process field found in class
+    public FieldVisitor visitField(int access, String name, String desc,
+        String sig, Object init) {
+        
+        // finish processing of last field
+        finishField();
+        
+        // save information for this field
+        m_fieldAccess = access;
+        m_fieldName = name;
+        m_fieldType = Type.getReturnType(desc);
+        m_fieldOrder = Integer.MAX_VALUE;
+        
+        // default text is empty if non-String object, otherwise from field name
+        if (m_fieldType.getSort() == Type.OBJECT &amp;&amp;
+            !m_fieldType.getClassName().equals("java.lang.String")) {
+            m_fieldText = "";
+        } else {
+            String text = name;
+            if (text.startsWith("m_") &amp;&amp; text.length() > 2) {
+                text = Character.toLowerCase(text.charAt(2)) +
+                    text.substring(3);
+            }
+            m_fieldText = text;
+        }
+        return super.visitField(access, name, desc, sig, init);
+    }
+    
+    // process annotation found in class
+    public AnnotationVisitor visitAnnotation(String sig, boolean visible) {
+        
+        // flag field to be included in representation
+        if (sig.equals("Lcom/sosnoski/asm/ToString;")) {
+            if ((m_fieldAccess &amp; Opcodes.ACC_STATIC) == 0) {
+                m_isIncluded = true;
+            } else {
+                throw new IllegalStateException("ToString " +
+                    "annotation is not supported for static field +" +
+                    " m_fieldName");
+            }
+        }
+        return super.visitAnnotation(sig, visible);
+    }
+    
+    // process annotation name-value pair found in class
+    public void visit(String name, Object value) {
+        
+        // ignore anything except the pair defined for toString() use
+        if ("order".equals(name)) {
+            m_fieldOrder = ((Integer)value).intValue();
+        } else if ("text".equals(name)) {
+            m_fieldText = value.toString();
+        }
+    }
+}
+
+package com.sosnoski.asm;
+
+import org.objectweb.asm.Type;
+
+/**
+ * Information for field value to be included in string representation.
+ */
+public class FieldInfo implements Comparable
+{
+    private final String m_field;
+    private final Type m_type;
+    private final int m_order;
+    private final String m_text;
+    
+    public FieldInfo(String field, Type type, int order,
+        String text) {
+        m_field = field;
+        m_type = type;
+        m_order = order;
+        m_text = text;
+    }
+    public String getField() {
+        return m_field;
+    }
+    public Type getType() {
+        return m_type;
+    }
+    public int getOrder() {
+        return m_order;
+    }
+    public String getText() {
+        return m_text;
+    }
+    
+    /* (non-Javadoc)
+     * @see java.lang.Comparable#compareTo(java.lang.Object)
+     */
+    public int compareTo(Object comp) {
+        if (comp instanceof FieldInfo) {
+            return m_order - ((FieldInfo)comp).m_order;
+        } else {
+            throw new IllegalArgumentException("Wrong type for comparison");
+        }
+    }
+}
+</code>
+
+<p>The Listing 5 code saves the field information at the
+time a field is visited, because this information will later be needed if the field has an
+annotation present. When an annotation is visited, the code checks whether it is a
+<code type="inline">ToString</code> annotation, and if so sets a flag that the
+current field should be included in the list to be used for generating the
+<code type="inline">toString()</code> method. When an annotation name-value pair
+is visited, the code checks for the two names defined by the <code
+type="inline">ToString</code> annotation and saves the value for each name when
+found. The real default values for these names (as opposed to the defaults used
+in the annotation definition) are set up in the field visitor method, so any
+value specified by the user will overwrite these defaults.</p>
+
+<p>ASM visits the field first, followed by the annotation and annotation values.
+There's no particular method that gets called when you're done processing the
+annotations for a field, so I just have a <code
+type="inline">finishField()</code> method that I call when processing a new field
+and when the completed list of fields is requested. The <code
+type="inline">getFields()</code> method provides this completed list of fields
+to the caller, ordered as determined by the annotation values.</p>
+
+<heading refname="h3.3" type="minor" toc="no">Transforming the class</heading>
+<p>The final portion of the implementation code, used to actually add the
+<code type="inline">toString()</code> method to a class, is given in Listing 6. This code is similar to the code in last month's {PJV: JENNI, PLEASE ADD LINK]column for constructing a class
+using ASM, but needs to be structured differently
+to modify an existing class. Here the visitor approach used by ASM
+adds a little complexity -- to modify an existing class, you need to visit all
+the current class content and pass it through to a class writer, filtering out
+portions you want to remove and adding your new content directly to the writer.
+<code type="inline">org.objectweb.asm.ClassAdapter</code> is a convenient base class for this purpose. It implements the pass-through handling
+for a supplied class writer instance, allowing you to override only the methods
+where you need special handling.</p>
+
+<code type="section">
+<heading refname="code6" type="code" toc="no">Listing 6. Adding the toString() method</heading>
+package com.sosnoski.asm;
+
+import org.objectweb.asm.ClassAdapter;
+import org.objectweb.asm.ClassWriter;
+import org.objectweb.asm.MethodVisitor;
+import org.objectweb.asm.Opcodes;
+import org.objectweb.asm.Type;
+
+/**
+ * Visitor to add &lt;code>toString&lt;/code> method to a class.
+ */
+public class ToStringGenerator extends ClassAdapter
+{
+    private final ClassWriter m_writer;
+    private final String m_internalName;
+    private final FieldInfo[] m_fields;
+    
+    public ToStringGenerator(ClassWriter cw, String iname, FieldInfo[] props) {
+        super(cw);
+        m_writer = cw;
+        m_internalName = iname;
+        m_fields = props;
+    }
+    
+    // called at end of class
+    public void visitEnd() {
+        
+        // set up to build the toString() method
+        MethodVisitor mv = m_writer.visitMethod(Opcodes.ACC_PUBLIC,
+            "toString", "()Ljava/lang/String;", null, null);
+        mv.visitCode();
+        
+        // create and initialize StringBuffer instance
+        mv.visitTypeInsn(Opcodes.NEW, "java/lang/StringBuffer");
+        mv.visitInsn(Opcodes.DUP);
+        mv.visitMethodInsn(Opcodes.INVOKESPECIAL, "java/lang/StringBuffer",
+            "&lt;init>", "()V");
+        
+        // start text with class name
+        String name = m_internalName;
+        int split = name.lastIndexOf('/');
+        if (split >= 0) {
+            name = name.substring(split+1);
+        }
+        mv.visitLdcInsn(name + ":");
+        mv.visitMethodInsn(Opcodes.INVOKEVIRTUAL, "java/lang/StringBuffer",
+            "append", "(Ljava/lang/String;)Ljava/lang/StringBuffer;");
+        
+        // loop through all field values to be included
+        boolean newline = false;
+        for (int i = 0; i &lt; m_fields.length; i++) {
+            
+            // check type of field (objects other than Strings need conversion)
+            FieldInfo prop = m_fields[i];
+            Type type = prop.getType();
+            boolean isobj = type.getSort() == Type.OBJECT &amp;&amp;
+                !type.getClassName().equals("java.lang.String");
+            
+            // format lead text, with newline for object or after object
+            String lead = (isobj || newline) ? "\n " : " ";
+            if (prop.getText().length() > 0) {
+                lead += prop.getText() + "=";
+            }
+            mv.visitLdcInsn(lead);
+            mv.visitMethodInsn(Opcodes.INVOKEVIRTUAL,
+                "java/lang/StringBuffer", "append",
+                "(Ljava/lang/String;)Ljava/lang/StringBuffer;");
+            
+            // load the actual field value and append
+            mv.visitVarInsn(Opcodes.ALOAD, 0);
+            mv.visitFieldInsn(Opcodes.GETFIELD, m_internalName,
+                prop.getField(), type.getDescriptor());
+            if (isobj) {
+                
+                // convert objects by calling toString() method
+                mv.visitMethodInsn(Opcodes.INVOKEVIRTUAL,
+                    type.getInternalName(), "toString",
+                    "()Ljava/lang/String;");
+                mv.visitMethodInsn(Opcodes.INVOKEVIRTUAL,
+                    "java/lang/StringBuffer", "append",
+                    "(Ljava/lang/String;)Ljava/lang/StringBuffer;");
+                
+            } else {
+                
+                // append other types directly to StringBuffer
+                mv.visitMethodInsn(Opcodes.INVOKEVIRTUAL,
+                    "java/lang/StringBuffer", "append", "(" +
+                    type.getDescriptor() + ")Ljava/lang/StringBuffer;");
+                
+            }
+            newline = isobj;
+        }
+        
+        // finish the method by returning accumulated text
+        mv.visitMethodInsn(Opcodes.INVOKEVIRTUAL, "java/lang/StringBuffer",
+            "toString", "()Ljava/lang/String;");
+        mv.visitInsn(Opcodes.ARETURN);
+        mv.visitMaxs(3, 1);
+        mv.visitEnd();
+        super.visitEnd();
+    }
+}
+</code>
+
+<p>In Listing 6, the only method I need to override is
+the <code type="inline">visitEnd()</code> method. This method gets called after
+all the existing class information has been visited, so it's a convenient place
+to implement the addition of new content. I've used the <code
+type="inline">visitEnd()</code> method to add the <code
+type="inline">toString()</code> method to the class being processed. In the code
+generation, I've added a few features for nice formatting of the <code
+type="inline">toString()</code> output, but the basic principle is simple --
+just loop through the supplied array of fields, generating the code to append
+first the lead text and then the actual field value to a <code
+type="inline">StringBuffer</code> instance.</p>
+
+<p>Because the current code will only work with J2SE 5.0 (due to the use of the
+instrumentation methods to intercept classloading) I could have used the new
+<code type="inline">StringBuilder</code> class as a more efficient equivalent to
+<code type="inline">StringBuffer</code>. I chose to go with the older
+alternative because of some follow-up work I'm going to do with this code next
+column, but it's worth keeping <code type="inline">StringBuilder</code> in mind
+for your own J2SE 5.0-specific code.</p>
+
+<heading refname="h3.4" type="minor" toc="no">ToString in action</heading>
+<p>Listing 7 shows some test classes for the <code
+type="inline">ToString</code> annotation. I've used a mixture of different
+styles for the actual annotations, specifying name-value pairs in some cases
+and just using the annotation by itself in other cases. The <code
+type="inline">Run</code> class just creates an instance of the <code
+type="inline">Customer</code> class with some sample data and prints the results
+of a <code type="inline">toString()</code> method call.</p>
+
+<code type="section">
+<heading refname="code7" type="code" toc="no">Listing 7. Test classes for ToString</heading>
+package com.sosnoski.dwct;
+
+import com.sosnoski.asm.ToString;
+
+public class Customer
+{
+    @ToString(order=1, text="#") private long m_number;
+    @ToString() private String m_homePhone;
+    @ToString() private String m_dayPhone;
+    @ToString(order=2) private Name m_name;
+    @ToString(order=3) private Address m_address;
+    
+    public Customer() {}
+    public Customer(long number, Name name, Address address, String homeph,
+        String dayph) {
+        m_number = number;
+        m_name = name;
+        m_address = address;
+        m_homePhone = homeph;
+        m_dayPhone = dayph;
+    }
+    ...
+}
+...
+public class Address
+{
+    @ToString private String m_street;
+    @ToString private String m_city;
+    @ToString private String m_state;
+    @ToString private String m_zip;
+    
+    public Address() {}
+    public Address(String street, String city, String state, String zip) {
+        m_street = street;
+        m_city = city;
+        m_state = state;
+        m_zip = zip;
+    }
+    public String getCity() {
+        return m_city;
+    }
+    public void setCity(String city) {
+        m_city = city;
+    }
+    ...
+}
+...
+public class Name
+{
+    @ToString(order=1, text="") private String m_first;
+    @ToString(order=2, text="") private String m_middle;
+    @ToString(order=3, text="") private String m_last;
+    
+    public Name() {}
+    public Name(String first, String middle, String last) {
+        m_first = first;
+        m_middle = middle;
+        m_last = last;
+    }
+    public String getFirst() {
+        return m_first;
+    }
+    public void setFirst(String first) {
+        m_first = first;
+    }
+    ...
+}
+...
+public class Run
+{
+    public static void main(String[] args) {
+        Name name = new Name("Dennis", "Michael", "Sosnoski");
+        Address address = new Address("1234 5th St.", "Redmond", "WA", "98052");
+        Customer customer = new Customer(12345, name, address,
+            "425 555-1212", "425 555-1213");
+        System.out.println(customer);
+    }
+}
+</code>
+
+<p>Finally, Listing 8 shows the console output from a test
+run (with the first line wrapped to fit):</p>
+
+<code type="section">
+<heading refname="code8" type="code" toc="no">Listing 8. Console output from test run (first line wrapped)</heading>
+[dennis@notebook code]$ java -cp lib/asm-2.0.RC1.jar:lib/asm-commons-2.0.RC1.jar
+  :lib/tostring-agent.jar:classes -javaagent:lib/tostring-agent.jar
+  com.sosnoski.dwct.Run
+Processing class sun/misc/URLClassPath$FileLoader$1
+Processing class com/sosnoski/dwct/Run
+Processing class com/sosnoski/dwct/Name
+Modifying com/sosnoski/dwct/Name
+Processing class com/sosnoski/dwct/Address
+Modifying com/sosnoski/dwct/Address
+Processing class com/sosnoski/dwct/Customer
+Modifying com/sosnoski/dwct/Customer
+Customer: #=12345
+ Name: Dennis Michael Sosnoski
+ Address: street=1234 5th St. city=Redmond state=WA zip=98052
+ homePhone=425 555-1212 dayPhone=425 555-1213
+</code>
+
+
+<heading refname="h4" type="major" toc="yes">Conclusions</heading>
+<p>I've demonstrated how you can use ASM in combination with J2SE 5.0
+annotations to perform automatic runtime classfile modification. The <code
+type="inline">ToString</code> annotation I used as an example is interesting
+and (at least for me) somewhat useful, and when used by itself doesn't much
+hinder the readability of the code. But if annotations are used for many
+different purposes (as will certainly be the case in the future, given how many
+Java extensions are being written or rewritten to make use of them), it seems
+likely that they <i>will</i> start to become intrusive in the code.</p>
+
+<p>I'll return to this point in a later column when I look at the trade-offs
+between annotations and external configuration files. My personal view is that
+both have their uses, and although annotations were developed largely as an
+easier alternative to configuration files, they are appropriate in some cases. Just for the record, I think the
+<code type="inline">ToString</code> annotation <i>is</i> an example of an
+appropriate use!</p>
+
+<p>One limitation of working with J2SE 5.0 extensions is that the JDK 1.5
+compiler output can only be used with the JDK 1.5 JVM. For the next
+<i>Classworking toolkit</i>column, I'm going to look into a tool that gets around
+this limitation, and show how the <code type="inline">ToString</code>
+implementation can be modified to work on older JVMs.</p>
+
+</docbody>
+
+<related-list>
+<a href="http://www.ibm.com/developerworks/library/j-annotate1/">Annotations in Tiger, Part 1: Add metadata to Java code</a>
+<a href="http://www.ibm.com/developerworks/library/j-annotate2.html">Annotations in Tiger, Part 2: Custom annotations</a>
+<a href="http://www-128.ibm.com/developerworks/views/java/libraryview.jsp?search_by=classworking%20toolkit:">Classworking toolkit</a>
+<a href="http://www.ibm.com/developerworks/views/java/articles.jsp?sort_order=desc&amp;expand=&amp;ort_by=Date&amp;show_abstract=true&amp;view_by=Search&amp;search_by=taming%20tiger"><i>Taming Tiger</i> series</a>
+<a href="http://www.ibm.com/developerworks/java/library/j-dyn0429/"><i>Java
+programming dynamics</i> series</a>
+<a href="http://www.ibm.com/developerworks/java/jdk/index.html">IBM developer kits for the Java platform (downloads)</a>
+
+</related-list>
+
+<resource-list>
+<ul>
+<li>Participate in the <a href="javascript:void forumWindow()">discussion forum</a> on this article. (You can also click <b>Discuss</b> at the top or bottom of the article to access the forum.)</li>
+
+<li>Click the <b>Code</b> icon at the top or bottom of this article to download code.zip, the code discussed in this article.</li>
+
+<li>Get the full details on the fast and flexible <a href="http://asm.objectweb.org/">ASM</a>
+Java bytecode manipulation framework.</li>
+
+<li>If you're looking for a quick summary of working with annotations in J2SE 5.0,
+check out Brett McLaughlin's "<a href="http://www.ibm.com/developerworks/library/j-annotate1/">Annotations in Tiger, Part 1: Add metadata to Java code</a>" (<i>developerWorks</i>, September 2004) and
+"<a href="http://www.ibm.com/developerworks/library/j-annotate2.html">Annotations in Tiger, Part 2: Custom annotations</a> (<i>developerWorks</i>, September 2004)."</li>
+
+<li>Learn how to both read and write J2SE 5.0 annotations using ASM in "<a href="http://www.oreillynet.com/pub/a/onjava/2004/10/20/asm.html">Create and Read J2SE 5.0 Annotations with the ASM Bytecode Toolkit</a>" by Eugene Kuleshov.</li>
+
+<li>Interested in how J2SE 5.0 differs from older versions of the Java platform? Check out the <i>developerWorks</i><a href="http://www.ibm.com/developerworks/views/java/articles.jsp?sort_order=desc&amp;expand=&amp;ort_by=Date&amp;show_abstract=true&amp;view_by=Search&amp;search_by=taming%20tiger"><i>Taming Tiger</i></a> series by John Zukowski for an in-depth look at all the changes.</li>
+
+<li>Find out all about J2SE annotations at <a href="http://www.jcp.org/en/jsr/detail?id=175">JSR-175 -
+A Metadata Facility for the Java Programming Language</a>.</li>
+
+<li>Check out the other columns in the <a href="http://www-128.ibm.com/developerworks/views/java/libraryview.jsp?search_by=classworking%20toolkit:"><i>Classworking toolkit</i></a>
+series by Dennis Sosnoski.</li>
+
+<li>Learn more about the Java bytecode design in "<a href="http://www-106.ibm.com/developerworks/ibm/library/it-haggar_bytecode/">Java bytecode: Understanding
+bytecode makes you a better programmer</a>" (<i>developerWorks</i>, July 2001) by Peter Haggar.</li>
+
+<li>[DMS: IS THIS BOOK AVAILABLE THROUGH IBM? MIGHT WANT A PURCHASE LINK HERE IF SO.]For an excellent reference to the JVM architecture and instruction set, see
+<i>Inside the Java Virtual Machine</i>, by Bill Venners (Artima Software, Inc., 2004). You can <a
+href="http://www.artima.com/insidejvm/ed2/">view some sample chapters online</a>
+to get a look at it before you purchase.</li>
+
+<li>You can <a href="http://java.sun.com/docs/books/vmspec/index.html">purchase
+or view the official Java Virtual Machine Specification online</a> for the definitive word on
+all aspects of JVM operation.</li>
+
+<li>Collect the whole <a href="http://www-106.ibm.com/developerworks/java/library/j-dyn0429/"><i>Java
+programming dynamics</i></a> series by author Dennis Sosnoski as he takes you on a tour
+of the Java class structure, reflection, and classworking.</li>
+
+<li>The open source <a href="http://www-124.ibm.com/developerworks/projects/jikes/">Jikes Project</a>
+provides a very fast and highly compliant compiler for the Java programming
+language. Use it to generate your bytecode the old fashioned way -- from Java
+source code.</li>
+
+<li>To learn more about Java technology, visit the <a href="http://www.ibm.com/developerworks/java/">
+<i>developerWorks</i> Java zone</a>. You'll find technical documentation, how-to articles,
+education, downloads, product information, and more.</li>
+
+<li>Visit the <a href="http://www-106.ibm.com/developerworks/java/newto/">New to Java technology</a> site for the latest resources to help you get started with Java programming.</li>
+
+<li>Get involved in the <i>developerWorks</i> community by participating in
+<a href="http://www.ibm.com/developerworks/blogs/"><i>developerWorks</i> blogs</a>.</li>
+
+<li>Purchase <a href="http://devworks.krcinfo.com/WebForms/ProductList.aspx?Search=Category&amp;id=1200&amp;p=Java"
+target="new">Java books at discounted prices</a> in the Java section
+of the Developer Bookstore.</li>
+</ul>
+</resource-list>
+</dw-article>
+</dw-document>

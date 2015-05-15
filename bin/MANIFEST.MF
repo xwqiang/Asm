@@ -1,0 +1,5 @@
+Manifest-Version: 1.0
+Boot-Class-Path: MyAsm.jar
+Premain-Class: com.sosnoski.asm.ToStringAgent
+Can-Redefine-Classes: true
+
